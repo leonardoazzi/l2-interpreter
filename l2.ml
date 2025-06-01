@@ -146,6 +146,14 @@ let rec step (e:expr_mem) : expr_mem =
   match e with 
   | (Num _, mem)   -> raise NoRuleApplies 
   | (Bool _, mem)  -> raise NoRuleApplies
+
+  (* == OP N ==================================================================== *)
+  | (Binop (Sum, Num n1, Num n2), mem) ->                           (* OP+ *)
+      (Num (n1 + n2), mem)
+  | (Binop (Lt, Num n1, Num n2), mem) when n1 < n2 ->               (* OP<TRUE *)
+      (Bool true, mem)
+  | (Binop (Lt, Num n1, Num n2), mem) when n1 >= n2 ->              (* OP<FALSE *)
+      (Bool false, mem)  
      
   (* == IF ====================================================================== *)
   | (If(Bool true,e2,e3), mem)  -> (e2, mem)                        (* IF-1 *)
@@ -297,6 +305,8 @@ let rec string_of_expr (e : expr) : string =
                     " then "  ^ (string_of_expr e2) ^ 
                     " else "  ^ (string_of_expr e3) 
   | Binop (op,e1,e2)  ->  (string_of_expr e1)  ^ (string_of_op op) ^ (string_of_expr e2)
+  | _ -> 
+      raise (TypeError "expressão não suportada para conversão em string")
 
 (* Função para interpretar uma expressão e imprimir o resultado *)
 let interp (e:expr) : unit =
