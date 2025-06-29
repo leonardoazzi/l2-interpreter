@@ -66,13 +66,13 @@ type tipo =
 
 (* in *)
 type inlist =
-  | Empty                   (* [] *)
-  | Cons of int * inlist    (* n::in *)
+  | EmptyIn                   (* [] *)
+  | ConsIn of int * inlist    (* n::in *)
 
 (* out *)
 type outlist =
-  | Empty                   (* [] *)
-  | Cons of int * outlist   (* n::out *)
+  | EmptyOut                   (* [] *)
+  | ConsOut of int * outlist   (* n::out *)
 
 (* ========= Semântica Operacional small-step ========= *)
 
@@ -82,9 +82,27 @@ type tymem = (loc * expr) list
 let empty_mem : tymem = []
 
 (* Expressão memória da semântica small-step *)
-type expr_mem = expr * tymem
+type expr_mem = expr * tymem * inlist * outlist
 
-(* Funções auxiliares *)
+(* ========= Funções auxiliares ========= *)
+
+(* read: read ()
+Função para ler uma string da entrada padrão *)
+let read (unit) : int =
+  try
+    print_endline "Digite um inteiro:";
+    (* Lê uma linha da entrada padrão e retorna como string *)
+    let input = read_int () in
+    input;
+  with _ -> raise (TypeError "entrada inválida para read_string()")
+
+let print (e: expr_mem): unit =
+  match e with
+  | (Num n, _, _, _) -> print_endline (string_of_int n)  (* Imprime número *)
+  | _ -> raise (TypeError "expressão não suportada para impressão")  (* Exceção para expressões não suportadas *)
+
+(* isvalue: e → bool
+   Verifica se uma expressão é um valor, ou seja, se não pode ser avaliada mais. *)
 
 (* update_memory: σ[l → v]
   Atualiza a memória g com um valor v na localização l *)
@@ -157,92 +175,112 @@ let rec subs (v: expr) (x: string) (e: expr) : expr =
   
 (* step: -> 
   Função para aplicar uma avaliação small-step na expressão *)
-let rec step (e:expr_mem) : expr_mem = 
-  match e with 
-  | (Num _, mem)   -> raise NoRuleApplies   (* Valor *)
-  | (Bool _, mem)  -> raise NoRuleApplies   (* Valor *)
+let rec step (e, mem, in_, out_): expr_mem = 
+  match (e, mem, in_, out_) with 
+  (* == VALORES ================================================================== *)
+
+  | (Num _, mem, _, _)   -> raise NoRuleApplies   (* Valor *)
+  | (Bool _, mem, _, _)  -> raise NoRuleApplies   (* Valor *)
 
   (* == OP N ==================================================================== *)
-  | (Binop (Sum, Num n1, Num n2), mem) ->                           (* OP+ *)
-      (Num (n1 + n2), mem)
-  | (Binop (Lt, Num n1, Num n2), mem) when n1 < n2 ->               (* OP<TRUE *)
-      (Bool true, mem)
-  | (Binop (Lt, Num n1, Num n2), mem) when n1 >= n2 ->              (* OP<FALSE *)
-      (Bool false, mem)  
+  | (Binop (Sum, Num n1, Num n2), mem, in_, out_) ->                           (* OP+ *)
+      (Num (n1 + n2), mem, in_, out_)
+  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 < n2 ->               (* OP<TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 >= n2 ->              (* OP<FALSE *)
+      (Bool false, mem, in_, out_)  
      
-  (* == IF ====================================================================== *)
-  | (If(Bool true,e2,e3), mem)  -> (e2, mem)                        (* IF-1 *)
-  | (If(Bool false,e2,e3), mem) -> (e3, mem)                        (* IF-2 *)
-  | (If(e1,e2,e3), mem) -> 
-      let (e1', mem') = step (e1, mem) in (If(e1', e2, e3), mem')   (* IF-3 *)
-
   (* == OP ====================================================================== *)
-  | (Binop (op,v1,v2), mem) when isvalue v1 && isvalue v2 -> (compute op v1 v2, mem) 
-  | (Binop (op,v1,e2), mem) when isvalue v1 ->  
-      let (e2', mem') = step (e2, mem) in (Binop (op,v1,e2'), mem') (* OP-2 *)
-  | (Binop (op,e1,e2), mem) ->  
-      let (e1', mem') = step (e1, mem) in (Binop (op,e1',e2), mem') (* OP-1 *) 
-  
+  | (Binop (op,e1,e2), mem, in_, out_) ->                           (* OP-1 *) 
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+      (Binop (op,e1',e2), mem', in_', out_') 
+  | (Binop (op,v1,e2), mem, in_, out_) when isvalue v1 ->           (* OP-2 *)
+      let (e2', mem', in_', out_') = step (e2, mem, in_, out_) in 
+      (Binop (op,v1,e2'), mem', in_', out_') 
+
+  (* == IF ====================================================================== *)
+  | (If(Bool true,e2,e3), mem, in_, out_)  -> (e2, mem, in_, out_)  (* IF-1 *)
+  | (If(Bool false,e2,e3), mem, in_, out_) -> (e3, mem, in_, out_)  (* IF-2 *)
+  | (If(e1,e2,e3), mem, in_, out_) -> 
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+        (If(e1', e2, e3), mem', in_', out_')                        (* IF-3 *)
+
   (* == E-LET =================================================================== *)
-  | (Let (x, v1, e2), mem) when isvalue v1 ->                       (* E-LET2 *)
-      (subs v1 x e2, mem)  (*  {v1/x} e2 *)  
-  | (Let (x, e1, e2), mem) ->
-      let (e1', mem') = step (e1, mem) in (Let (x, e1', e2), mem')  (* E-LET1 *)
+  | (Let (x, e1, e2), mem, in_, out_) ->                            (* E-LET1 *)
+    let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+      (Let (x, e1', e2), mem', in_', out_')  
+  | (Let (x, v1, e2), mem, in_, out_) when isvalue v1 ->            (* E-LET2 *)
+      (subs v1 x e2, mem, in_, out_)  (*  {v1/x} e2 *)  
   
   (* == ATR ===================================================================== *)
-  | (Atr (l, v1), mem) when isvalue l && isvalue v1 ->              (* ATR1 *)
+  | (Atr (l, v1), mem, in_, out_) when isvalue l && isvalue v1 ->   (* ATR1 *)
       (Unit, update_memory mem (match l with 
                                   Memloc loc -> loc 
-                                  | _ -> raise NoRuleApplies) 
-                            v1)                                     
-  | (Atr (l, e1), mem) when isvalue l ->
-      let (e1', mem') = step (e1, mem) in (Atr (l, e1'), mem')      (* ATR2 *)
-  | (Atr (e1, e2), mem) ->
-      let (e1', mem') = step (e1, mem) in (Atr (e1', e2), mem')     (* ATR *)
+                                  | _ -> raise NoRuleApplies) v1, in_, out_)   
+
+  | (Atr (l, e1), mem, in_, out_) when isvalue l ->                 (* ATR2 *)
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+        (Atr (l, e1'), mem', in_', out_')      
+  | (Atr (e1, e2), mem, in_, out_) ->                               (* ATR *)
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+        (Atr (e1', e2), mem', in_', out_')     
 
   (* == DERREF ================================================================== *)
-  | (Derref (l), mem) when isvalue l ->                             (* DERREF1 *)
+  | (Derref (l), mem, in_, out_) when isvalue l ->                  (* DERREF1 *)
       (match lookup_memory mem (match l with 
                                 Memloc loc -> loc 
                                 | _ -> raise NoRuleApplies) with
        (* Se a localização existir, retorna o valor *)
-       | Some v -> (v, mem)  
+       | Some v -> (v, mem, in_, out_)  
        (* Se não existir, lança exceção *) 
        | None -> raise NoRuleApplies)  
-  | (Derref (e), mem) ->
-      let (e', mem') = step (e, mem) in (Derref (e'), mem')         (* DERREF *)
+  | (Derref (e), mem, in_, out_) ->                                 (* DERREF *)
+      let (e', mem', in_', out_') = step (e, mem, in_, out_) in 
+        (Derref (e'), mem', in_', out_')         
   
   (* == NEW ====================================================================== *)
-  | (New (v), mem) when isvalue v ->                                (* NEW1 *)
+  | (New (v), mem, in_, out_) when isvalue v ->                     (* NEW1 *)
       (* Nova localização baseada no tamanho atual da memória *)                           
       let loc = List.length mem in  
-      (Memloc loc, update_memory mem loc v) 
-  | (New (e), mem) -> 
-      let (e', mem') = step (e, mem) in (New (e'), mem')            (* NEW *)
+      (Memloc loc, update_memory mem loc v, in_, out_)  
+  | (New (e), mem, in_, out_) ->                                    (* NEW *)
+      let (e', mem', in_', out_') = step (e, mem, in_, out_) in 
+        (New (e'), mem', in_', out_')            
 
   (* == SEQ ====================================================================== *)
-  | (Seq (Unit, e2), mem) -> (e2, mem)                              (* SEQ1 *)
-  | (Seq (e1,e2), mem) ->                                           (* SEQ2 *)
-      let (e1', mem') = step (e1, mem) in 
-      (Seq (e1', e2), mem')                                         
+  | (Seq (Unit, e2), mem, in_, out_) -> (e2, mem, in_, out_)        (* SEQ1 *)
+  | (Seq (e1,e2), mem, in_, out_) ->                                (* SEQ2 *)
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+      (Seq (e1', e2), mem', in_', out_')                                         
 
   (* == WHILE ==================================================================== *)
-  | (While (e1, e2), mem) ->                                        (* E-WHILE *)
+  | (While (e1, e2), mem, in_, out_) ->                             (* E-WHILE *)
       if e1 = Bool true then
-        (Seq (e2, While (e1, e2)), mem)
+        (Seq (e2, While (e1, e2)), mem, in_, out_)
       else
-        (Unit, mem)
+        (Unit, mem, in_, out_)
 
   (* == PRINT ==================================================================== *)
-  | (Print (n), mem) when isvalue n ->                              (* PRINT-N *)
-      (Unit, mem)  (* Imprime o valor e retorna Unit *)
+  | (Print n, mem, in_, out_) when isvalue n ->                     (* PRINT-N *)
+      (match n with
+       | Num v -> (Unit, mem, in_, ConsOut (v, out_))
+       | _ -> raise (TypeError "Print só suporta números"))
 
-  | (Print (e), mem) -> 
-      let (e', mem') = step (e, mem) in (Print (e'), mem')          (* PRINT *)
+  | (Print e, mem, in_, out_) -> 
+      let (e', mem', in_', out_') = step (e, mem, in_, out_) in     (* PRINT *)
+        (Print (e'), mem', in_', out_')     
 
   (* == READ ===================================================================== *)
-  (* | (Read, mem) ->  VEM AÍ COM n.in*) (* @TODO *)
-  | _ -> raise NoRuleApplies  (* TODO: TEMPORÁRIO *)
+  | (Read, mem, in_, out_) -> 
+      (* Se a expressão for Read, lê um valor da entrada *)         (* READ *)
+      (match in_ with
+      | EmptyIn -> raise (TypeError "entrada esgotada")  (* Se a entrada estiver vazia, lança exceção *)
+      | ConsIn (n, rest) -> 
+          (* Lê o primeiro valor da entrada e retorna como Num *)
+          (Num n, mem, rest, out_))  (* Retorna o valor lido como Num *)  
+    
+  (* == NONE ===================================================================== *) 
+  | _ -> raise NoRuleApplies
     
 (* ========= Sistema de Tipos ========= *)
 
@@ -283,14 +321,6 @@ let rec typeinfer (e:expr) : tipo =
 
 
 (* ========= Interpretador ========= *)
-
-(* Função principal de avaliação *)
-let rec eval (e: expr_mem) : expr_mem  =
-  try 
-    let e' = step e
-    in eval e'
-  with NoRuleApplies -> e
-
 (* Função para converter uma operação binária em string *)
 let rec string_of_op (op: bop)  : string = 
   match op with 
@@ -327,13 +357,23 @@ let rec string_of_expr (e : expr) : string =
   | _ -> 
       raise (TypeError "expressão não suportada para conversão em string")
 
+(* Função principal de avaliação *)
+let rec eval (e: expr_mem) : expr_mem  =
+  try 
+    let e' = step e
+    in eval e'
+  with NoRuleApplies -> e
+
 (* Função para interpretar uma expressão e imprimir o resultado *)
-let interp (e:expr_mem) : unit =
+let interp (e:expr_mem) : unit = 
   try
-    let t = typeinfer (fst e) in
-    let v = eval e
-    in  ( print_string ("Resultado:\n")  ;
-          print_string ((string_of_expr (fst v)) ^ " : " ^ (string_of_tipo t) ))
+    let (e1, _, _, _) = e in
+    (* let t = typeinfer e1 in *)
+    let v = eval e in
+    let (v1, _, _, _) = v in
+    ( print_string ("Resultado:\n")  ;
+      (* print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t)) ) *)
+      print_string ((string_of_expr v1) ^ " : ") )
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg) 
   | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
@@ -344,95 +384,98 @@ let teste1 =  Binop(Sum, Num 10, Binop(Mul, Num 30, Num 2))  (*   10 + 30 * 2  *
 let teste2 =  Binop(Mul, Binop(Sum, Num 10, Num 30), Num 2)  (*   (10 + 30) * 2  *)
 let teste3 =  If(Binop(Eq, Num 5, Num 5), Binop(Mul, Num 10, Num 2), Binop(Sum, Num 10, Num 2))
 
-(* ========== Testes de Avaliação ========= *)
-let () =
 
-  (* Testes de Avaliação *)
-  print_string "Testes de Avaliação:\n";
-  let e1 = (teste1, empty_mem) in
-  let e2 = (teste2, empty_mem) in
-  let e3 = (teste3, empty_mem) in     
-  print_string "Teste 1:\n";
-  interp e1;
-  print_newline ();
-  print_string "Teste 2:\n";
-  interp e2;
-  print_newline ();
-  print_string "Teste 3:\n";
-  interp e3;
-  print_newline ();
-
-  (* Teste de IF *)
-  print_string "Teste de If:\n";
-  interp (If(Bool true, Num 42, Num 0), empty_mem);
-  print_newline ();
-
-  (* Teste de Atribuição *)
-  print_string "Teste de Atribuição:\n";
-  interp (Let("x", Num 10, Binop(Sum, Id "x", Num 5)), empty_mem);
-  print_newline ();
-
-  (* Teste de Atribuição com Memória *)
-  print_string "Teste de Atribuição com Memória:\n";
-  let mem_test = update_memory empty_mem 0 (Num 100) in
-  interp (Atr(Memloc 0, Num 200), mem_test);
-  print_newline ();
-
-  (* Teste de Derreferência *)
-  print_string "Teste de Derreferência:\n";
-  interp (Derref(Memloc 0), mem_test);
-  print_newline ();
-
-  (* Teste de Nova Alocação *)
-  print_string "Teste de Nova Alocação:\n";
-  interp (New (Num 42), empty_mem);
-  print_newline ();
-
-  (* Teste de Sequência *)
-  print_string "Teste de Sequência:\n";
-  interp (Seq(Num 1, Num 2), empty_mem);
-  print_newline ();
-
-  (* Teste de While *)
-  print_string "Teste de While:\n";
-  interp (While(Bool true, Num 42), empty_mem);
-  print_newline ();
-
-  (* Teste de Print *)
-  print_string "Teste de Print:\n";
-  interp (Print (Num 42), empty_mem);
-  print_newline ();
-
-  (* Teste de Read *)
-  print_string "Teste de Read:\n";
-  interp (Read, empty_mem); (* Este teste não funcionará corretamente sem implementação de leitura *)
-  print_newline ();
-
-  (* Teste de Memloc *)
-  print_string "Teste de Memloc:\n";
-  interp (Memloc 0, empty_mem);
-  print_newline ();
-
-  (* Teste de Unit *)
-  print_string "Teste de Unit:\n";
-  interp (Unit, empty_mem);
-  print_newline ();
-
-  (* Teste de Identificador *)
-  print_string "Teste de Identificador:\n";
-  interp (Id "x", empty_mem); (* Este teste não funcionará corretamente sem implementação de variáveis *)
-  print_newline ();
-
-  (* Teste de Atribuição com Identificador *)
-  print_string "Teste de Atribuição com Identificador:\n";
-  interp (Let("x", Num 10, Atr(Id "x", Num 20)), empty_mem);
-  print_newline ();
-
-  (* Teste de Atribuição com Identificador e Memória *)
-  print_string "Teste de Atribuição com Identificador e Memória:\n";
-  let mem_test2 = update_memory empty_mem 1 (Num 100) in
-  interp (Let("y", Memloc 1, Atr(Id "y", Num 200)), mem_test2);
-  print_newline ();
-
-  
 end
+
+(* ========== Testes de Avaliação ========= *)
+let teste = L2.read ();
+L2.eval(L2.Read, L2.empty_mem, L2.ConsIn (1, L2.ConsIn (2, L2.EmptyIn)), L2.EmptyOut); (* Teste de leitura e impressão *)
+
+(* Testes de Tipos *)
+
+(* Testes de Avaliação
+print_string "Testes de Avaliação:\n";
+let e1 = (L2.teste1, L2.empty_mem) in
+let e2 = (L2.teste2, L2.empty_mem) in
+let e3 = (L2.teste3, L2.empty_mem) in     
+print_string "Teste 1:\n";
+L2.interp e1;
+print_newline ();
+print_string "Teste 2:\n";
+L2.interp e2;
+print_newline ();
+print_string "Teste 3:\n";
+L2.interp e3;
+print_newline ();
+
+(* Teste de IF *)
+print_string "Teste de If:\n";
+L2.interp (L2.If(L2.Bool true, L2.Num 42, L2.Num 0), L2.empty_mem);
+print_newline ();
+
+(* Teste de Atribuição *)
+print_string "Teste de Atribuição:\n";
+L2.interp (L2.Let("x", L2.Num 10, L2.Binop(L2.Sum, L2.Id "x", L2.Num 5)), L2.empty_mem);
+print_newline ();
+
+(* Teste de Atribuição com Memória *)
+print_string "Teste de Atribuição com Memória:\n";
+let mem_test = L2.update_memory L2.empty_mem 0 (L2.Num 100) in
+L2.interp (L2.Atr(L2.Memloc 0, L2.Num 200), mem_test);
+print_newline ();
+
+(* Teste de Derreferência *)
+print_string "Teste de Derreferência:\n";
+L2.interp (L2.Derref(L2.Memloc 0), mem_test);
+print_newline ();
+
+(* Teste de Nova Alocação *)
+print_string "Teste de Nova Alocação:\n";
+L2.interp (L2.New (L2.Num 42), L2.empty_mem);
+print_newline ();
+
+(* Teste de Sequência *)
+print_string "Teste de Sequência:\n";
+L2.interp (L2.Seq(L2.Num 1, L2.Num 2), L2.empty_mem);
+print_newline ();
+
+(* Teste de While *)
+print_string "Teste de While:\n";
+L2.interp (L2.While(L2.Bool true, L2.Num 42), L2.empty_mem);
+print_newline ();
+
+(* Teste de Print *)
+print_string "Teste de Print:\n";
+L2.interp (L2.Print (L2.Num 42), L2.empty_mem);
+print_newline ();
+
+(* Teste de Read *)
+print_string "Teste de Read:\n";
+L2.interp (L2.Read, L2.empty_mem); (* Este teste não funcionará corretamente sem implementação de leitura *)
+print_newline ();
+
+(* Teste de Memloc *)
+print_string "Teste de Memloc:\n";
+L2.interp (L2.Memloc 0, L2.empty_mem);
+print_newline ();
+
+(* Teste de Unit *)
+print_string "Teste de Unit:\n";
+L2.interp (L2.Unit, L2.empty_mem);
+print_newline ();
+
+(* Teste de Identificador *)
+print_string "Teste de Identificador:\n";
+L2.interp (L2.Id "x", L2.empty_mem); (* Este teste não funcionará corretamente sem implementação de variáveis *)
+print_newline ();
+
+(* Teste de Atribuição com Identificador *)
+print_string "Teste de Atribuição com Identificador:\n";
+L2.interp (L2.Let("x", L2.Num 10, L2.Atr(L2.Id "x", L2.Num 20)), L2.empty_mem);
+print_newline ();
+
+(* Teste de Atribuição com Identificador e Memória *)
+print_string "Teste de Atribuição com Identificador e Memória:\n";
+let mem_test2 = L2.update_memory L2.empty_mem 1 (L2.Num 100) in
+L2.interp (L2.Let("y", L2.Memloc 1, L2.Atr(L2.Id "y", L2.Num 200)), mem_test2);
+print_newline (); *)
