@@ -12,7 +12,7 @@ L2 language interpreter implemented in OCaml. INF05516 - Semântica Formal (25/1
     - [x]  Implementar novos tipos
 - [ ]  Avaliação small-step
     - [x]  Implementar todas as regras com memória
-    - [ ]  Implementar todas as regras com in,out
+    - [x]  Implementar todas as regras com in,out
 - [ ]  Sistema de tipos
     - [ ]  Implementar todas as regras de tipo no typeinfer
 - [ ]  Interpretador

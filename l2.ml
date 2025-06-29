@@ -59,10 +59,10 @@ let isvalue (e:expr) : bool =
   
 (* Tipos *)
 type tipo =
-  | TyBool (* bool *)
-  | TyInt  (* int *)
-  | TyRef  (* ref T *)
-  | TyUnit (* unit *)
+  | TyBool        (* bool *)
+  | TyInt         (* int *)
+  | TyRef of tipo (* ref T *)
+  | TyUnit        (* unit *)
 
 (* in *)
 type inlist =
@@ -178,16 +178,17 @@ let rec subs (v: expr) (x: string) (e: expr) : expr =
 let rec step (e, mem, in_, out_): expr_mem = 
   match (e, mem, in_, out_) with 
   (* == VALORES ================================================================== *)
-
-  | (Num _, mem, _, _)   -> raise NoRuleApplies   (* Valor *)
-  | (Bool _, mem, _, _)  -> raise NoRuleApplies   (* Valor *)
+  | (Num _, mem, _, _)   -> raise NoRuleApplies  
+  | (Bool _, mem, _, _)  -> raise NoRuleApplies  
+  | (Unit, mem, _, _) -> raise NoRuleApplies
+  | (Memloc _, mem, _, _) -> raise NoRuleApplies
 
   (* == OP N ==================================================================== *)
-  | (Binop (Sum, Num n1, Num n2), mem, in_, out_) ->                           (* OP+ *)
+  | (Binop (Sum, Num n1, Num n2), mem, in_, out_) ->                (* OP+ *)
       (Num (n1 + n2), mem, in_, out_)
-  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 < n2 ->               (* OP<TRUE *)
+  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 < n2 ->    (* OP<TRUE *)
       (Bool true, mem, in_, out_)
-  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 >= n2 ->              (* OP<FALSE *)
+  | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 >= n2 ->   (* OP<FALSE *)
       (Bool false, mem, in_, out_)  
      
   (* == OP ====================================================================== *)
@@ -274,49 +275,96 @@ let rec step (e, mem, in_, out_): expr_mem =
   | (Read, mem, in_, out_) -> 
       (* Se a expressão for Read, lê um valor da entrada *)         (* READ *)
       (match in_ with
-      | EmptyIn -> raise (TypeError "entrada esgotada")  (* Se a entrada estiver vazia, lança exceção *)
+      | EmptyIn -> raise (TypeError "entrada vazia")
       | ConsIn (n, rest) -> 
-          (* Lê o primeiro valor da entrada e retorna como Num *)
-          (Num n, mem, rest, out_))  (* Retorna o valor lido como Num *)  
+          (Num n, mem, rest, out_))
     
   (* == NONE ===================================================================== *) 
   | _ -> raise NoRuleApplies
     
 (* ========= Sistema de Tipos ========= *)
+type tyenv = (string * tipo) list (* Γ Ambiente de tipos *)
+let empty_env : tyenv = []
 
 (* Função para inferir o tipo de uma expressão *)
-let rec typeinfer (e:expr) : tipo =
+let rec typeinfer (env: tyenv) (e:expr) : tipo =
   match e with 
-  | Num _ -> TyInt
-  | Bool _  -> TyBool 
+  | Num _ -> TyInt                                (* T-INT *)
+  | Bool _  -> TyBool                             (* T-BOOL *)                 
     
-  | If(e1,e2,e3)         -> 
-      if (typeinfer e1) = TyBool then
-        let t2 = typeinfer e2 in
-        let t3 = typeinfer e3 in 
+  | Binop (Sum,e1,e2) ->                          (* T-OP+ *)   
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 == TyInt then 
+        if t2 == t1 then TyInt
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Lt,e1,e2) ->                          (* T-OP+ *)   
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 == TyInt then 
+        if t2 == t1 then TyBool
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | If (e1,e2,e3)         ->                     (* T-IF *)
+      if (typeinfer env e1) = TyBool then
+        let t2 = typeinfer env e2 in
+        let t3 = typeinfer env e3 in 
         if t2 = t3 then t2 
         else raise (TypeError "then e else devem ser do mesmo tipo")
       else raise (TypeError "condição do if deve ser booleana ") 
-        
-  | Binop (op,e1,e2)  ->
-      let t1 = typeinfer e1 in 
-      let t2 = typeinfer e2 in 
-      (match op with
-       | Sum | Sub | Mul | Div -> 
-           if t1 = TyInt && t2 = TyInt 
-           then TyInt
-           else raise (TypeError "operandos de ops aritméticas devem ser inteiros")
-               
-       | Eq | Neq | Lt | Geq -> 
-           if t1 = TyInt && t2 = TyInt 
-           then TyBool
-           else raise (TypeError "operandos de ops relacionais devem ser inteiros")
-               
-       | And | Or  -> 
-           if t1 = TyBool && t2 = TyBool 
-           then TyBool
-           else raise (TypeError "operandos de ops lógicos devem ser booleanos"))
-    | _ -> 
+
+  | Id x ->                                     (* T-ATR *)
+      (try List.assoc x env
+        with Not_found -> raise (TypeError ("variável livre: " ^ x)))
+
+  | Let (x, e1, e2) ->                          (* T-LET *)
+      let t1 = typeinfer env e1 in
+        let n_env = ((x, t1) :: env) in   (* x |→ T *)
+          let t2 = typeinfer n_env e2 in
+          if t1 != t2 then t2
+          else raise (TypeError ("e1 deve ter tipo diferente de e2"))
+      
+  | Atr (e1, e2) ->                             (* T-ATR *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 == TyRef t2 then TyUnit
+      else raise (TypeError ("o tipo ref T de e1 precisa ter o ser do mesmo tipo T de e2"))
+
+  | Derref e1 ->                                (* T-DERREF *)
+      let t1 = typeinfer env e1 in
+      (match t1 with
+        TyRef t -> t  (* Se for um tipo de referência, retorna o tipo referenciado *)
+      | _ -> raise (TypeError "e1 deve ser do tipo ref T"))
+
+  | New e1 ->                                   (* T-NEW *)
+      let t1 = typeinfer env e1 in TyRef t1
+  
+  | Unit -> TyUnit                              (* T-UNIT *)
+
+  | While (e1, e2) ->                           (* T-WHILE *)
+      if (typeinfer env e1) = TyBool then
+        let t2 = typeinfer env e2 in
+        if t2 = TyUnit then TyUnit
+        else raise (TypeError "corpo do while deve ser do tipo unit")
+      else raise (TypeError "condição do while deve ser booleana")
+
+  | Seq (e1, e2) ->                             (* T-SEQ *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyUnit then t2
+      else raise (TypeError "e1 deve ser do tipo unit")
+
+  | Read -> TyInt                               (* T-READ *)
+
+  | Print e1 ->                                 (* T-PRINT *)
+      let t1 = typeinfer env e1 in
+      if t1 = TyInt then TyUnit
+      else raise (TypeError "print só suporta números inteiros")
+
+  | _ -> 
         raise (TypeError "expressão não suportada para inferência de tipo") (* TODO: adicionar mais expressões *)
 
 
@@ -340,7 +388,7 @@ let rec string_of_tipo (t: tipo)  : string =
   match t with 
     TyInt  -> " int " 
   | TyBool -> " bool " 
-  | TyRef -> " ref "
+  | TyRef t_ -> " ref "
   | TyUnit -> " unit "
   | _ -> 
       raise (TypeError "tipo não suportado para conversão em string") (* TODO: adicionar mais tipos *)
@@ -368,16 +416,14 @@ let rec eval (e: expr_mem) : expr_mem  =
 let interp (e:expr_mem) : unit = 
   try
     let (e1, _, _, _) = e in
-    (* let t = typeinfer e1 in *)
+    let t = typeinfer empty_env e1 in
     let v = eval e in
     let (v1, _, _, _) = v in
     ( print_string ("Resultado:\n")  ;
-      (* print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t)) ) *)
-      print_string ((string_of_expr v1) ^ " : ") )
+      print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t)) )
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg) 
   | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
-
 
 (* ========= ASTs para TESTES ========= *)
 let teste1 =  Binop(Sum, Num 10, Binop(Mul, Num 30, Num 2))  (*   10 + 30 * 2  *)
@@ -385,11 +431,14 @@ let teste2 =  Binop(Mul, Binop(Sum, Num 10, Num 30), Num 2)  (*   (10 + 30) * 2 
 let teste3 =  If(Binop(Eq, Num 5, Num 5), Binop(Mul, Num 10, Num 2), Binop(Sum, Num 10, Num 2))
 
 
+        
 end
 
 (* ========== Testes de Avaliação ========= *)
 let teste = L2.read ();
-L2.eval(L2.Read, L2.empty_mem, L2.ConsIn (1, L2.ConsIn (2, L2.EmptyIn)), L2.EmptyOut); (* Teste de leitura e impressão *)
+L2.interp(L2.Read, L2.empty_mem, L2.ConsIn (1, L2.ConsIn (2, L2.EmptyIn)), L2.EmptyOut); (* Teste de leitura e impressão *)
+
+
 
 (* Testes de Tipos *)
 
