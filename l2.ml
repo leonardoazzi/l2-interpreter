@@ -13,19 +13,28 @@ exception BugTypeInfer  (* Declara exceção para erros de tipo inferido *)
 exception NoRuleApplies (* Declara exceção para quando não há regra aplicável *)
 exception TypeError of string (* Declara exceção para erros de tipo *)
 
+
 (* ========= Sintaxe Abstrata ========= *)
 
 (* Expressões binárias *)
 (* bop ∈ {+, -, *, /, ==, <>, <, >, &&, ||}*)
-type bop = Sum | Sub | Mul | Div   (* operações aritméticas *)
-         | Eq  | Neq | Lt | Geq   (* operações relacionais  *)
-         | And | Or   (* operações lógicas *)
+type bop =  
+  | Sum | Sub | Mul | Div   (* operações aritméticas *)
+  | Eq  | Neq | Lt | Gt   (* operações relacionais  *)
+  | And | Or   (* operações lógicas *) 
 
 (* Identificadores *)
 type ident = string 
 
 (* Localização de uma variável no ambiente de execução *)
 type loc = int
+
+(* Tipos *)
+type tipo =
+  | TyBool        (* bool *)
+  | TyInt         (* int *)
+  | TyRef of tipo (* ref T *)
+  | TyUnit        (* unit *)
 
 (* Expressões *)
 type expr = 
@@ -34,12 +43,12 @@ type expr =
   | If of expr * expr * expr (* operação if else *)                 (* if e_1 then e_2 else e_3 *)
   | Binop of bop * expr * expr (* operações binárias *)             (* e_1 op e_2*)
   | Id of ident (* variável identificada por um nome *)             (* x *)
-  | Let of ident * expr * expr (* declaração local *)               (* let x:T = e_1 in e_2*)
-  | Atr of expr * expr (* atribuição de valor a local dememória *)  (* e_1 := e_2*)
-  | Derref of expr (* Acessa o valor em uma posição de memória *)   (* !e *)
+  | Let of ident * tipo * expr * expr (* declaração local *)               (* let x:T = e_1 in e_2*)
+  | Asg of expr * expr (* atribuição de valor a local dememória *)  (* e_1 := e_2*)
+  | Deref of expr (* Acessa o valor em uma posição de memória *)    (* !e *)
   | New of expr (* aloca valor em uma nova posição de memória *)    (* new e *)
   | Unit (* valor unitário, indica ausência de valor *)             (* () *)
-  | While of expr * expr (* laço de repetição *)                    (* while e_1 do e_2 *)
+  | Wh of expr * expr (* laço de repetição *)                       (* while e_1 do e_2 *)
   | Seq of expr * expr (* sequência de expressões *)                (* e_1; e_2 *)
   | Memloc of loc (* referência a uma posição de memória *)         (* l *)
   | Read (* lê uma entrada*)                                        (* read() *)
@@ -51,18 +60,11 @@ type expr =
    Verifica se uma expressão é um valor, ou seja, se não pode ser avaliada mais. *) 
 let isvalue (e:expr) : bool = 
   match e with  (* Se avaliarem para true, as expressões são valores*)
-    Num _   -> true   (* n *)
+   Num _   -> true   (* n *)
   | Bool _  -> true   (* b *)
   | Unit  -> true     (* () *)
   | Memloc _ -> true  (* l *)
   | _ -> false
-  
-(* Tipos *)
-type tipo =
-  | TyBool        (* bool *)
-  | TyInt         (* int *)
-  | TyRef of tipo (* ref T *)
-  | TyUnit        (* unit *)
 
 (* in *)
 type inlist =
@@ -73,6 +75,55 @@ type inlist =
 type outlist =
   | EmptyOut                   (* [] *)
   | ConsOut of int * outlist   (* n::out *)
+
+(* Função para converter uma operação binária em string *)
+let rec string_of_op (op: bop)  : string = 
+  match op with 
+    Sum -> " + " 
+  | Sub -> " - "
+  | Mul -> " * "
+  | Div -> " / "  
+  | Eq  -> " = "
+  | Neq -> " != "
+  | Lt -> " < "
+  | Gt -> " > "  
+  | And -> " and "
+  | Or -> " or "
+  
+(* Função para converter um tipo em string *)
+let rec string_of_tipo (t: tipo)  : string = 
+  match t with 
+    TyInt  -> " int " 
+  | TyBool -> " bool " 
+  | TyRef t_ -> "ref " ^ string_of_tipo t_
+  | TyUnit -> " unit "
+  | _ -> 
+      raise (TypeError "tipo não suportado para conversão em string") (* TODO: adicionar mais tipos *)
+    
+(* Função para converter uma expressão em string *)
+let rec string_of_expr (e : expr) : string = 
+  match e with
+  | Num  n  -> string_of_int n
+  | Bool b  -> string_of_bool b 
+  | If(e1,e2,e3) -> " if "    ^ (string_of_expr e1) ^ 
+                    " then "  ^ (string_of_expr e2) ^ 
+                    " else "  ^ (string_of_expr e3) 
+  | Binop (op,e1,e2)  ->  (string_of_expr e1)  ^ (string_of_op op) ^ (string_of_expr e2)
+  | Id x -> x
+  | Let (x, tipo, e1, e2) -> "let " ^ x ^ " : " ^ (string_of_tipo tipo) ^ 
+                              " = " ^ (string_of_expr e1) ^ 
+                              " in " ^ (string_of_expr e2)
+  | Asg (e1, e2) -> (string_of_expr e1) ^ " := " ^ (string_of_expr e2)
+  | Deref e1 -> "!" ^ (string_of_expr e1)
+  | New e1 -> "new " ^ (string_of_expr e1)
+  | Unit -> "()"
+  | Wh (e1, e2) -> "while " ^ (string_of_expr e1) ^ 
+                   " do " ^ (string_of_expr e2)
+  | Seq (e1, e2) -> (string_of_expr e1) ^ "; " ^ (string_of_expr e2)
+  | Memloc loc -> "l" ^ string_of_int loc
+  | Read -> "read()"
+  | Print e1 -> "print " ^ (string_of_expr e1)
+  
 
 (* ========= Semântica Operacional small-step ========= *)
 
@@ -124,29 +175,6 @@ let lookup_memory (g: tymem) (l: loc) : expr option =
     | _ :: tail -> aux tail  (* Caso contrário, continua procurando *)
   in aux g
 
-(* compute_bop: [[n_1]] bop [[n_2]]
-  Função para computar o resultado de uma operação binária *)
-let compute (op: bop) (v1:expr) (v2:expr) : expr = 
-  match (op,v1,v2) with
-    (* operações aritméticas *)
-    (Sum,Num n1, Num n2) -> Num (n1 + n2) (* soma *)
-  | (Sub,Num n1, Num n2) -> Num (n1 - n2) (* subtração *)
-  | (Mul,Num n1, Num n2) -> Num (n1 * n2) (* multiplicação *)                     
-  | (Div,Num n1, Num n2) -> Num (n1 / n2) (* divisão *)
-    
-    (* operações relacionais *)
-  | (Eq,Num n1, Num n2)  -> Bool (n1 = n2) (* igualdade *)
-  | (Neq,Num n1, Num n2) -> Bool (n1 != n2) (* diferença *)
-  | (Lt,Num n1, Num n2)  -> Bool (n1 < n2) (* menor que *)       
-  | (Geq,Num n1, Num n2)  -> Bool (n1 >= n2) (* maior ou igual que *)
-    
-    (* operações lógicas *)
-  | (And, Bool b1, Bool b2) -> Bool (b1 && b2) (* conjunção (AND) *)
-  | (Or,  Bool b1, Bool b2) -> Bool (b1 || b2) (* disjunção (OR) *)
-    
-  (* caso não seja uma operação válida *)
-  |  _ -> raise BugTypeInfer 
-
 (* subs: {v/x}
   Função para substituir uma variável x por um valor v em uma expressão e.
   Se a variável for a mesma, substitui pelo valor, caso contrário, mantém a expressão.
@@ -158,30 +186,43 @@ let rec subs (v: expr) (x: string) (e: expr) : expr =
   | Id y -> if y = x then v else e
   | Binop (op, e1, e2) -> Binop (op, subs v x e1, subs v x e2)
   | If (e1, e2, e3) -> If (subs v x e1, subs v x e2, subs v x e3)
-  | Let (y, e1, e2) ->
-      if y = x then Let (y, subs v x e1, e2)
-      else Let (y, subs v x e1, subs v x e2)
-  | Atr (e1, e2) -> Atr (subs v x e1, subs v x e2)
-  | Derref e1 -> Derref (subs v x e1)
+  | Let (y, tipo, e1, e2) when y = x ->
+      Let (y, tipo, subs v x e1, e2)  (* Não substitui em e2 por shadowing *)
+  | Let (y, tipo, e1, e2) ->
+      Let (y, tipo, subs v x e1, subs v x e2)
+  | Asg (e1, e2) -> Asg (subs v x e1, subs v x e2)
+  | Deref e1 -> Deref (subs v x e1)
   | New e1 -> New (subs v x e1)
   | Seq (e1, e2) -> Seq (subs v x e1, subs v x e2)
-  | While (e1, e2) -> While (subs v x e1, subs v x e2)
+  | Wh (e1, e2) -> Wh (subs v x e1, subs v x e2)
   | Print e1 -> Print (subs v x e1)
   | Unit -> Unit
   | Memloc _ -> e
   | Read -> Read
   | _ -> raise (TypeError "expressão não suportada para substituição")
 
-  
+  (* append_out: outlist * int → outlist
+   Função para adicionar um valor v a uma lista de saída out.
+   Se a lista estiver vazia, cria uma nova lista com o valor.
+   Caso contrário, adiciona o valor ao final da lista existente. *)
+  let rec append_out (out: outlist) (v: int) : outlist =
+    (* Debug: imprime o valor a ser adicionado e o estado atual da lista *)
+    match out with
+    | EmptyOut -> 
+        ConsOut (v, EmptyOut)
+    | ConsOut (h, t) -> 
+        ConsOut (h, append_out t v)
+
 (* step: -> 
   Função para aplicar uma avaliação small-step na expressão *)
-let rec step (e, mem, in_, out_): expr_mem = 
+let rec step (e, mem, in_, out_) = 
   match (e, mem, in_, out_) with 
+
   (* == VALORES ================================================================== *)
-  | (Num _, mem, _, _)   -> raise NoRuleApplies  
-  | (Bool _, mem, _, _)  -> raise NoRuleApplies  
-  | (Unit, mem, _, _) -> raise NoRuleApplies
-  | (Memloc _, mem, _, _) -> raise NoRuleApplies
+  | (Num n, mem, in_, out_)   -> (Num n, mem, in_, out_)
+  | (Bool b, mem, in_, out_)  -> (Bool b, mem, in_, out_)
+  | (Unit, mem, in_, out_)    -> raise NoRuleApplies
+  | (Memloc l, mem, in_, out_) -> (Memloc l, mem, in_, out_)
 
   (* == OP N ==================================================================== *)
   | (Binop (Sum, Num n1, Num n2), mem, in_, out_) ->                (* OP+ *)
@@ -190,14 +231,43 @@ let rec step (e, mem, in_, out_): expr_mem =
       (Bool true, mem, in_, out_)
   | (Binop (Lt, Num n1, Num n2), mem, in_, out_) when n1 >= n2 ->   (* OP<FALSE *)
       (Bool false, mem, in_, out_)  
+  | (Binop (Gt, Num n1, Num n2), mem, in_, out_) when n1 > n2 ->    (* OP>TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (Gt, Num n1, Num n2), mem, in_, out_) when n1 <= n2 ->   (* OP>FALSE *)
+      (Bool false, mem, in_, out_)
+  | (Binop (And, Bool b1, Bool b2), mem, in_, out_) when b1 && b2 -> (* OP&&TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (And, Bool b1, Bool b2), mem, in_, out_) when not (b1 && b2) -> (* OP&&FALSE *)
+      (Bool false, mem, in_, out_)
+  | (Binop (Or, Bool b1, Bool b2), mem, in_, out_) when b1 || b2 -> (* OP||TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (Or, Bool b1, Bool b2), mem, in_, out_) when not (b1 || b2) -> (* OP||FALSE *)
+      (Bool false, mem, in_, out_)
+  | (Binop (Eq, Num n1, Num n2), mem, in_, out_) when n1 = n2 ->    (* OP=TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (Eq, Num n1, Num n2), mem, in_, out_) when n1 <> n2 -> (* OP=FALSE *)
+      (Bool false, mem, in_, out_)
+  | (Binop (Neq, Num n1, Num n2), mem, in_, out_) when n1 <> n2 -> (* OP<>TRUE *)
+      (Bool true, mem, in_, out_)
+  | (Binop (Neq, Num n1, Num n2), mem, in_, out_) when n1 = n2 -> (* OP<>FALSE *)
+      (Bool false, mem, in_, out_)
+  | (Binop (Sub, Num n1, Num n2), mem, in_, out_) -> (* OP- *)
+      (Num (n1 - n2), mem, in_, out_)
+  | (Binop (Mul, Num n1, Num n2), mem, in_, out_) -> (* OP* *)
+      (Num (n1 * n2), mem, in_, out_)
+  | (Binop (Div, Num n1, Num n2), mem, in_, out_) when n2 <> 0 -> (* OP/ *)
+      (Num (n1 / n2), mem, in_, out_)
+  | (Binop (Div, Num n1, Num n2), mem, in_, out_) when n2 = 0 -> (* OP/0 *)
+      raise (TypeError "Divisão por zero")  (* Lança exceção se divisão por zero *)
      
   (* == OP ====================================================================== *)
-  | (Binop (op,e1,e2), mem, in_, out_) ->                           (* OP-1 *) 
-      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
-      (Binop (op,e1',e2), mem', in_', out_') 
   | (Binop (op,v1,e2), mem, in_, out_) when isvalue v1 ->           (* OP-2 *)
       let (e2', mem', in_', out_') = step (e2, mem, in_, out_) in 
       (Binop (op,v1,e2'), mem', in_', out_') 
+  | (Binop (op,e1,e2), mem, in_, out_) ->                           (* OP-1 *) 
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+      (Binop (op,e1',e2), mem', in_', out_') 
+
 
   (* == IF ====================================================================== *)
   | (If(Bool true,e2,e3), mem, in_, out_)  -> (e2, mem, in_, out_)  (* IF-1 *)
@@ -207,27 +277,33 @@ let rec step (e, mem, in_, out_): expr_mem =
         (If(e1', e2, e3), mem', in_', out_')                        (* IF-3 *)
 
   (* == E-LET =================================================================== *)
-  | (Let (x, e1, e2), mem, in_, out_) ->                            (* E-LET1 *)
-    let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
-      (Let (x, e1', e2), mem', in_', out_')  
-  | (Let (x, v1, e2), mem, in_, out_) when isvalue v1 ->            (* E-LET2 *)
-      (subs v1 x e2, mem, in_, out_)  (*  {v1/x} e2 *)  
+
+  (* E-LET2: aplica substituição se e1 já for um valor *)
+  | (Let (x, tipo, v1, e2), mem, in_, out_) when isvalue v1 ->
+      let e2' = subs v1 x e2 in
+      (e2', mem, in_, out_)
+  (* E-LET1: só aplica step em e1 se ele ainda não for um valor *)
+  | (Let (x, tipo, e1, e2), mem, in_, out_) when not (isvalue e1) ->
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
+      (Let (x, tipo, e1', e2), mem', in_', out_')
+
+
+
+    
   
   (* == ATR ===================================================================== *)
-  | (Atr (l, v1), mem, in_, out_) when isvalue l && isvalue v1 ->   (* ATR1 *)
-      (Unit, update_memory mem (match l with 
-                                  Memloc loc -> loc 
-                                  | _ -> raise NoRuleApplies) v1, in_, out_)   
-
-  | (Atr (l, e1), mem, in_, out_) when isvalue l ->                 (* ATR2 *)
-      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
-        (Atr (l, e1'), mem', in_', out_')      
-  | (Atr (e1, e2), mem, in_, out_) ->                               (* ATR *)
-      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
-        (Atr (e1', e2), mem', in_', out_')     
-
+  | (Asg (e1, e2), mem, in_, out_) when not (isvalue e1) ->
+      let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in
+      (Asg (e1', e2), mem', in_', out_')
+  | (Asg (l, e2), mem, in_, out_) when isvalue l && not (isvalue e2) ->
+      let (e2', mem', in_', out_') = step (e2, mem, in_, out_) in
+      (Asg (l, e2'), mem', in_', out_')
+  | (Asg (l, v1), mem, in_, out_) when isvalue l && isvalue v1 ->
+      (Unit, update_memory mem (match l with
+                                  Memloc loc -> loc
+                                | _ -> raise NoRuleApplies) v1, in_, out_) 
   (* == DERREF ================================================================== *)
-  | (Derref (l), mem, in_, out_) when isvalue l ->                  (* DERREF1 *)
+  | (Deref l, mem, in_, out_) when isvalue l ->                  (* DERREF1 *)
       (match lookup_memory mem (match l with 
                                 Memloc loc -> loc 
                                 | _ -> raise NoRuleApplies) with
@@ -235,10 +311,10 @@ let rec step (e, mem, in_, out_): expr_mem =
        | Some v -> (v, mem, in_, out_)  
        (* Se não existir, lança exceção *) 
        | None -> raise NoRuleApplies)  
-  | (Derref (e), mem, in_, out_) ->                                 (* DERREF *)
+  | (Deref e, mem, in_, out_) ->                                 (* DERREF *)
       let (e', mem', in_', out_') = step (e, mem, in_, out_) in 
-        (Derref (e'), mem', in_', out_')         
-  
+        (Deref e', mem', in_', out_')         
+
   (* == NEW ====================================================================== *)
   | (New (v), mem, in_, out_) when isvalue v ->                     (* NEW1 *)
       (* Nova localização baseada no tamanho atual da memória *)                           
@@ -255,32 +331,43 @@ let rec step (e, mem, in_, out_): expr_mem =
       (Seq (e1', e2), mem', in_', out_')                                         
 
   (* == WHILE ==================================================================== *)
-  | (While (e1, e2), mem, in_, out_) ->                             (* E-WHILE *)
-      if e1 = Bool true then
-        (Seq (e2, While (e1, e2)), mem, in_, out_)
-      else
-        (Unit, mem, in_, out_)
-
+  | (Wh (e1, e2), mem, in_, out_) ->
+      (If(e1, Seq(e2, Wh(e1, e2)), Unit), mem, in_, out_)
   (* == PRINT ==================================================================== *)
   | (Print n, mem, in_, out_) when isvalue n ->                     (* PRINT-N *)
-      (match n with
-       | Num v -> (Unit, mem, in_, ConsOut (v, out_))
-       | _ -> raise (TypeError "Print só suporta números"))
-
-  | (Print e, mem, in_, out_) -> 
-      let (e', mem', in_', out_') = step (e, mem, in_, out_) in     (* PRINT *)
-        (Print (e'), mem', in_', out_')     
+    (match n with
+     | Num v -> 
+         let updated_out = append_out out_ v in
+         (Unit, mem, in_, updated_out)
+     | _ -> 
+         raise (TypeError "Print só suporta números"))
+  | (Print (Let (x, tipo, v1, e2)), mem, in_, out_) when isvalue v1 ->
+      (Print (subs v1 x e2), mem, in_, out_)
+  | (Print e, mem, in_, out_) when not (isvalue e) -> 
+    let (e', mem', in_', out_') = step (e, mem, in_, out_) in     (* PRINT *)
+    (Print e', mem', in_', out_')     
+  | (Print n, mem, in_, out_) when isvalue n ->                     (* PRINT-N *)
+    (match n with
+     | Num v -> 
+         let updated_out = append_out out_ v in
+         (Unit, mem, in_, updated_out)
+     | _ -> 
+         raise (TypeError "Print só suporta números"))
 
   (* == READ ===================================================================== *)
   | (Read, mem, in_, out_) -> 
-      (* Se a expressão for Read, lê um valor da entrada *)         (* READ *)
-      (match in_ with
-      | EmptyIn -> raise (TypeError "entrada vazia")
-      | ConsIn (n, rest) -> 
-          (Num n, mem, rest, out_))
-    
+    (* Se a expressão for Read, lê um valor da entrada *)         (* READ *)
+    (match in_ with
+    | EmptyIn -> 
+      raise (TypeError "entrada vazia")
+    | ConsIn (n, rest) -> 
+      (Num n, mem, rest, out_))
+
+
+
   (* == NONE ===================================================================== *) 
-  | _ -> raise NoRuleApplies
+  | _ -> 
+    raise (TypeError "Nenhuma regra se aplica à expressão fornecida")  (*Caso não haja regra aplicável*)
     
 (* ========= Sistema de Tipos ========= *)
 type tyenv = (string * tipo) list (* Γ Ambiente de tipos *)
@@ -295,18 +382,78 @@ let rec typeinfer (env: tyenv) (e:expr) : tipo =
   | Binop (Sum,e1,e2) ->                          (* T-OP+ *)   
       let t1 = typeinfer env e1 in
       let t2 = typeinfer env e2 in
-      if t1 == TyInt then 
-        if t2 == t1 then TyInt
+      if t1 = TyInt then 
+        if t2 = t1 then TyInt
         else raise (TypeError "e2 não é do tipo int")
       else raise (TypeError "e1 não é do tipo int")
 
-  | Binop (Lt,e1,e2) ->                          (* T-OP+ *)   
-      let t1 = typeinfer env e1 in
+  | Binop (Sub,e1,e2) ->                          (* T-OP- *)   
+      let t1 = typeinfer env e1 in 
       let t2 = typeinfer env e2 in
-      if t1 == TyInt then 
-        if t2 == t1 then TyBool
+      if t1 = TyInt then
+        if t2 = t1 then TyInt
         else raise (TypeError "e2 não é do tipo int")
       else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Mul,e1,e2) ->                          (* T-OP* *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyInt then 
+        if t2 = t1 then TyInt
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Div,e1,e2) ->                          (* T-OP/ *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyInt then 
+        if t2 = t1 then TyInt
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Lt,e1,e2) ->                          (* T-OP< *)   
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyInt then 
+        if t2 = t1 then TyBool
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Gt,e1,e2) ->                          (* T-OP> *)   
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyInt then 
+        if t2 = t1 then TyBool
+        else raise (TypeError "e2 não é do tipo int")
+      else raise (TypeError "e1 não é do tipo int")
+
+  | Binop (Eq,e1,e2) ->                          (* T-OP= *)   
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = t2 then TyBool
+      else raise (TypeError "e1 e e2 devem ser do mesmo tipo para comparação")
+
+  | Binop (Neq,e1,e2) ->                          (* T-OP!= *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = t2 then TyBool
+      else raise (TypeError "e1 e e2 devem ser do mesmo tipo para comparação")
+
+  | Binop (And,e1,e2) ->                          (* T-OP&& *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyBool then
+        if t2 = t1 then TyBool
+        else raise (TypeError "e2 não é do tipo bool")
+      else raise (TypeError "e1 não é do tipo bool")
+
+  | Binop (Or,e1,e2) ->                           (* T-OP|| *)
+      let t1 = typeinfer env e1 in
+      let t2 = typeinfer env e2 in
+      if t1 = TyBool then
+        if t2 = t1 then TyBool
+        else raise (TypeError "e2 não é do tipo bool")
+      else raise (TypeError "e1 não é do tipo bool")
 
   | If (e1,e2,e3)         ->                     (* T-IF *)
       if (typeinfer env e1) = TyBool then
@@ -320,20 +467,20 @@ let rec typeinfer (env: tyenv) (e:expr) : tipo =
       (try List.assoc x env
         with Not_found -> raise (TypeError ("variável livre: " ^ x)))
 
-  | Let (x, e1, e2) ->                          (* T-LET *)
+  | Let (x, tipo, e1, e2) ->                    (* T-LET *)
       let t1 = typeinfer env e1 in
-        let n_env = ((x, t1) :: env) in   (* x |→ T *)
-          let t2 = typeinfer n_env e2 in
-          if t1 != t2 then t2
-          else raise (TypeError ("e1 deve ter tipo diferente de e2"))
+        if t1 = tipo then
+          let n_env = ((x, tipo) :: env) in     (* x |→ T *)
+          typeinfer n_env e2
+        else raise (TypeError ("tipo de e1 não corresponde ao tipo declarado para " ^ x))
       
-  | Atr (e1, e2) ->                             (* T-ATR *)
+  | Asg (e1, e2) ->                             (* T-ATR *)
       let t1 = typeinfer env e1 in
       let t2 = typeinfer env e2 in
-      if t1 == TyRef t2 then TyUnit
+      if t1 = TyRef t2 then TyUnit
       else raise (TypeError ("o tipo ref T de e1 precisa ter o ser do mesmo tipo T de e2"))
 
-  | Derref e1 ->                                (* T-DERREF *)
+  | Deref e1 ->                                (* T-DERREF *)
       let t1 = typeinfer env e1 in
       (match t1 with
         TyRef t -> t  (* Se for um tipo de referência, retorna o tipo referenciado *)
@@ -344,7 +491,7 @@ let rec typeinfer (env: tyenv) (e:expr) : tipo =
   
   | Unit -> TyUnit                              (* T-UNIT *)
 
-  | While (e1, e2) ->                           (* T-WHILE *)
+  | Wh (e1, e2) ->                           (* T-WHILE *)
       if (typeinfer env e1) = TyBool then
         let t2 = typeinfer env e2 in
         if t2 = TyUnit then TyUnit
@@ -365,166 +512,72 @@ let rec typeinfer (env: tyenv) (e:expr) : tipo =
       else raise (TypeError "print só suporta números inteiros")
 
   | _ -> 
-        raise (TypeError "expressão não suportada para inferência de tipo") (* TODO: adicionar mais expressões *)
+        raise BugTypeInfer
 
 
 (* ========= Interpretador ========= *)
-(* Função para converter uma operação binária em string *)
-let rec string_of_op (op: bop)  : string = 
-  match op with 
-    Sum -> " + " 
-  | Sub -> " - "
-  | Mul -> " * "
-  | Div -> " / "  
-  | Eq  -> " = "
-  | Neq -> " != "
-  | Lt -> " < "
-  | Geq -> " >= "  
-  | And -> " and "
-  | Or -> " or "
-  
-(* Função para converter um tipo em string *)
-let rec string_of_tipo (t: tipo)  : string = 
-  match t with 
-    TyInt  -> " int " 
-  | TyBool -> " bool " 
-  | TyRef t_ -> " ref "
-  | TyUnit -> " unit "
-  | _ -> 
-      raise (TypeError "tipo não suportado para conversão em string") (* TODO: adicionar mais tipos *)
-    
-(* Função para converter uma expressão em string *)
-let rec string_of_expr (e : expr) : string = 
-  match e with
-  | Num  n  -> string_of_int n
-  | Bool b  -> string_of_bool b 
-  | If(e1,e2,e3) -> " if "    ^ (string_of_expr e1) ^ 
-                    " then "  ^ (string_of_expr e2) ^ 
-                    " else "  ^ (string_of_expr e3) 
-  | Binop (op,e1,e2)  ->  (string_of_expr e1)  ^ (string_of_op op) ^ (string_of_expr e2)
-  | _ -> 
-      raise (TypeError "expressão não suportada para conversão em string")
 
-(* Função principal de avaliação *)
+(* Função principal de avaliação - versão tail-recursive para garantir avaliação completa de lets aninhados *)
 let rec eval (e: expr_mem) : expr_mem  =
-  try 
-    let e' = step e
-    in eval e'
-  with NoRuleApplies -> e
+  let rec aux (e: expr_mem) =
+    try 
+      let e' = step e in
+      aux e'
+    with NoRuleApplies -> e
+  in aux e
+
+(* Função para imprimir a saída *)
+let rec print_outlist out =
+  match out with
+  | EmptyOut -> ();
+  | ConsOut (n, rest) ->
+      print_string ("Saída: " ^ string_of_int n ^ "\n");
+      print_outlist rest
 
 (* Função para interpretar uma expressão e imprimir o resultado *)
-let interp (e:expr_mem) : unit = 
+let interp (env:tyenv) (e:expr_mem) : unit = 
   try
     let (e1, _, _, _) = e in
-    let t = typeinfer empty_env e1 in
+    let t = typeinfer env e1 in
     let v = eval e in
-    let (v1, _, _, _) = v in
-    ( print_string ("Resultado:\n")  ;
-      print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t)) )
+    let (v1, _, _, out) = v in
+    print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t) ^ "\n");
+    print_outlist out
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg) 
   | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
 
 (* ========= ASTs para TESTES ========= *)
-let teste1 =  Binop(Sum, Num 10, Binop(Mul, Num 30, Num 2))  (*   10 + 30 * 2  *)
-let teste2 =  Binop(Mul, Binop(Sum, Num 10, Num 30), Num 2)  (*   (10 + 30) * 2  *)
-let teste3 =  If(Binop(Eq, Num 5, Num 5), Binop(Mul, Num 10, Num 2), Binop(Sum, Num 10, Num 2))
+
+(*         
+           
+let  x: int     =  read() in 
+let  z: ref int = new x in 
+let  y: ref int = new 1 in 
+
+(while (!z > 0) (
+        y :=  !y * !z;
+        z :=  !z - 1);
+print (! y))     
+
+*)
+
+let cndwhi = Binop(Gt, Deref (Id "z"),Num 0)
+let asgny = Asg(Id "y", Binop(Mul, Deref (Id "y"),Deref(Id "z")))
+let asgnz = Asg(Id "z", Binop(Sub, Deref (Id "z"),Num 1))
+let bdwhi = Seq(asgny, asgnz) 
+let whi = Wh(cndwhi, bdwhi)
+let prt = Print(Deref (Id "y"))
+let seq = Seq(whi, prt)
+    
+let fat = Let("x", TyInt, Read, 
+              Let("z", TyRef TyInt, New (Id "x"), 
+                  Let("y", TyRef TyInt, New (Num 1),
+                      seq)))
 
 
-        
 end
 
 (* ========== Testes de Avaliação ========= *)
-let teste = L2.read ();
-L2.interp(L2.Read, L2.empty_mem, L2.ConsIn (1, L2.ConsIn (2, L2.EmptyIn)), L2.EmptyOut); (* Teste de leitura e impressão *)
-
-
-
-(* Testes de Tipos *)
-
-(* Testes de Avaliação
-print_string "Testes de Avaliação:\n";
-let e1 = (L2.teste1, L2.empty_mem) in
-let e2 = (L2.teste2, L2.empty_mem) in
-let e3 = (L2.teste3, L2.empty_mem) in     
-print_string "Teste 1:\n";
-L2.interp e1;
-print_newline ();
-print_string "Teste 2:\n";
-L2.interp e2;
-print_newline ();
-print_string "Teste 3:\n";
-L2.interp e3;
-print_newline ();
-
-(* Teste de IF *)
-print_string "Teste de If:\n";
-L2.interp (L2.If(L2.Bool true, L2.Num 42, L2.Num 0), L2.empty_mem);
-print_newline ();
-
-(* Teste de Atribuição *)
-print_string "Teste de Atribuição:\n";
-L2.interp (L2.Let("x", L2.Num 10, L2.Binop(L2.Sum, L2.Id "x", L2.Num 5)), L2.empty_mem);
-print_newline ();
-
-(* Teste de Atribuição com Memória *)
-print_string "Teste de Atribuição com Memória:\n";
-let mem_test = L2.update_memory L2.empty_mem 0 (L2.Num 100) in
-L2.interp (L2.Atr(L2.Memloc 0, L2.Num 200), mem_test);
-print_newline ();
-
-(* Teste de Derreferência *)
-print_string "Teste de Derreferência:\n";
-L2.interp (L2.Derref(L2.Memloc 0), mem_test);
-print_newline ();
-
-(* Teste de Nova Alocação *)
-print_string "Teste de Nova Alocação:\n";
-L2.interp (L2.New (L2.Num 42), L2.empty_mem);
-print_newline ();
-
-(* Teste de Sequência *)
-print_string "Teste de Sequência:\n";
-L2.interp (L2.Seq(L2.Num 1, L2.Num 2), L2.empty_mem);
-print_newline ();
-
-(* Teste de While *)
-print_string "Teste de While:\n";
-L2.interp (L2.While(L2.Bool true, L2.Num 42), L2.empty_mem);
-print_newline ();
-
-(* Teste de Print *)
-print_string "Teste de Print:\n";
-L2.interp (L2.Print (L2.Num 42), L2.empty_mem);
-print_newline ();
-
-(* Teste de Read *)
-print_string "Teste de Read:\n";
-L2.interp (L2.Read, L2.empty_mem); (* Este teste não funcionará corretamente sem implementação de leitura *)
-print_newline ();
-
-(* Teste de Memloc *)
-print_string "Teste de Memloc:\n";
-L2.interp (L2.Memloc 0, L2.empty_mem);
-print_newline ();
-
-(* Teste de Unit *)
-print_string "Teste de Unit:\n";
-L2.interp (L2.Unit, L2.empty_mem);
-print_newline ();
-
-(* Teste de Identificador *)
-print_string "Teste de Identificador:\n";
-L2.interp (L2.Id "x", L2.empty_mem); (* Este teste não funcionará corretamente sem implementação de variáveis *)
-print_newline ();
-
-(* Teste de Atribuição com Identificador *)
-print_string "Teste de Atribuição com Identificador:\n";
-L2.interp (L2.Let("x", L2.Num 10, L2.Atr(L2.Id "x", L2.Num 20)), L2.empty_mem);
-print_newline ();
-
-(* Teste de Atribuição com Identificador e Memória *)
-print_string "Teste de Atribuição com Identificador e Memória:\n";
-let mem_test2 = L2.update_memory L2.empty_mem 1 (L2.Num 100) in
-L2.interp (L2.Let("y", L2.Memloc 1, L2.Atr(L2.Id "y", L2.Num 200)), mem_test2);
-print_newline (); *)
+let teste =
+L2.interp L2.empty_env (L2.fat, L2.empty_mem, L2.ConsIn (4, L2.EmptyIn), L2.EmptyOut);

@@ -7,3 +7,4 @@ l2-interpreter.code-workspace
 *.o
 l2
 test_l2
+test
