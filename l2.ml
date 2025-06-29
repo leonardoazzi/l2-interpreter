@@ -287,10 +287,6 @@ let rec step (e, mem, in_, out_) =
       let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in 
       (Let (x, tipo, e1', e2), mem', in_', out_')
 
-
-
-    
-  
   (* == ATR ===================================================================== *)
   | (Asg (e1, e2), mem, in_, out_) when not (isvalue e1) ->
       let (e1', mem', in_', out_') = step (e1, mem, in_, out_) in

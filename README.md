@@ -10,13 +10,13 @@ L2 language interpreter implemented in OCaml. INF05516 - Semântica Formal (25/1
     - [x]  Implementar as novas expressões
     - [x]  Implementar novos valores
     - [x]  Implementar novos tipos
-- [ ]  Avaliação small-step
+- [x]  Avaliação small-step
     - [x]  Implementar todas as regras com memória
     - [x]  Implementar todas as regras com in,out
-- [ ]  Sistema de tipos
-    - [ ]  Implementar todas as regras de tipo no typeinfer
-- [ ]  Interpretador
-    - [ ]  Verificar exceções
+- [x]  Sistema de tipos
+    - [x]  Implementar todas as regras de tipo no typeinfer
+- [x]  Interpretador
+    - [x]  Verificar exceções
     - [ ]  Testar
 
 # Setup
@@ -79,8 +79,8 @@ Dentro do interpretador, carregue seu arquivo:
 Para compilar um arquivo `.ml` para bytecode e executar:
 
 ```sh
-ocamlc -o nome_programa seuarquivo.ml
-./nome_programa
+ocamlc -o l2 l2.ml
+./l2
 ```
 
 # Testes
