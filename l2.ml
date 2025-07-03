@@ -1,5 +1,8 @@
 (* Trabalho de Semântica Formal 
 
+Leonardo Azzi Martins
+Leonardo Dalpian Dutra
+
 Objetivo: implementar em OCaml um interpretador para a linguagem L2 da especificação.
 Bônus: com variações definidas que serão deixadas propositalmente subespecificadas.
 
@@ -216,13 +219,14 @@ let rec subs (v: expr) (x: string) (e: expr) : expr =
 (* step: -> 
   Função para aplicar uma avaliação small-step na expressão *)
 let rec step (e, mem, in_, out_) = 
+  print_endline ("step: " ^ string_of_expr e);
   match (e, mem, in_, out_) with 
 
   (* == VALORES ================================================================== *)
-  | (Num n, mem, in_, out_)   -> (Num n, mem, in_, out_)
-  | (Bool b, mem, in_, out_)  -> (Bool b, mem, in_, out_)
+  | (Num n, mem, in_, out_)   -> raise NoRuleApplies
+  | (Bool b, mem, in_, out_)  -> raise NoRuleApplies
   | (Unit, mem, in_, out_)    -> raise NoRuleApplies
-  | (Memloc l, mem, in_, out_) -> (Memloc l, mem, in_, out_)
+  | (Memloc l, mem, in_, out_) -> raise NoRuleApplies
 
   (* == OP N ==================================================================== *)
   | (Binop (Sum, Num n1, Num n2), mem, in_, out_) ->                (* OP+ *)
@@ -538,7 +542,18 @@ let interp (env:tyenv) (e:expr_mem) : unit =
     let v = eval e in
     let (v1, _, _, out) = v in
     print_string ((string_of_expr v1) ^ " : " ^ (string_of_tipo t) ^ "\n");
-    print_outlist out
+    print_outlist out;
+
+    (* Imprime o estado atual da memória *)
+    let rec print_mem mem =
+      match mem with
+      | [] -> ()
+      | (loc, v)::rest ->
+          print_string ("Mem[" ^ string_of_int loc ^ "] = " ^ string_of_expr v ^ "\n");
+          print_mem rest
+    in
+    let (_, mem, _, _) = v in
+    print_mem mem
   with
     TypeError msg ->  print_string ("erro de tipo - " ^ msg) 
   | BugTypeInfer  ->  print_string "corrigir bug em typeinfer"
@@ -570,7 +585,6 @@ let fat = Let("x", TyInt, Read,
               Let("z", TyRef TyInt, New (Id "x"), 
                   Let("y", TyRef TyInt, New (Num 1),
                       seq)))
-
 
 end
 
